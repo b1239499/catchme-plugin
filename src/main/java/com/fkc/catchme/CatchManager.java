@@ -1,213 +1,125 @@
 package com.fkc.catchme;
 
 import org.bukkit.Bukkit;
-import org.bukkit.entity.Entity;
+import org.bukkit.Material;
+import org.bukkit.entity.EntityType;
+import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
+import org.bukkit.event.Listener;
+import org.bukkit.event.entity.EntityDamageByEntityEvent;
+import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.player.PlayerInteractEntityEvent;
+import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.plugin.Plugin;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.TimeUnit;
+import java.util.EnumSet;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
- * Tracks who is carrying whom (or what), and pending carry requests.
- * The passenger can be a Player (via request/accept) or any other Entity
- * (e.g. an animal, picked up directly by sneak + right-click).
- * Every mutation happens synchronously on the thread that already owns the
- * relevant entity (command execution / event handling), so this stays
- * safe on Folia: we never touch entities from an unrelated async thread.
+ * Handles "sneak + empty-hand right-click" pickup of animals.
+ * Kept separate from CatchListener (which only does cleanup bookkeeping)
+ * to keep the two concerns readable on their own.
  */
-public class CatchManager {
+public class CatchAnimalListener implements Listener {
 
-    // carrierUUID -> passengerUUID (passenger can be a Player or any other Entity)
-    private final Map<UUID, UUID> activeCarries = new HashMap<>();
-    // passengerUUID -> requesterUUID (the requester wants to carry the key player)
-    private final Map<UUID, UUID> pendingRequests = new HashMap<>();
-
-    private static final double MAX_DISTANCE = 8.0;
-    private static final long REQUEST_TIMEOUT_SECONDS = 30;
+    // Hard safety blacklist. These never get picked up, no matter what the
+    // server owner puts in config.yml.
+    private static final Set<EntityType> HARD_BLACKLIST = EnumSet.of(
+            EntityType.ENDER_DRAGON,
+            EntityType.WITHER,
+            EntityType.WARDEN,
+            EntityType.GIANT
+    );
 
     private final Plugin plugin;
+    private final CatchManager manager;
 
-    public CatchManager(Plugin plugin) {
+    public CatchAnimalListener(Plugin plugin, CatchManager manager) {
         this.plugin = plugin;
+        this.manager = manager;
     }
 
-    public boolean isCarrying(UUID carrierId) {
-        return activeCarries.containsKey(carrierId);
-    }
-
-    public boolean isBeingCarried(UUID passengerId) {
-        return activeCarries.containsValue(passengerId);
-    }
-
-    /**
-     * @return the UUID of whoever is carrying the given passenger,
-     *         or null if that entity is not being carried.
-     */
-    public UUID getCarrierOf(UUID passengerId) {
-        for (Map.Entry<UUID, UUID> entry : activeCarries.entrySet()) {
-            if (entry.getValue().equals(passengerId)) {
-                return entry.getKey();
-            }
-        }
-        return null;
-    }
-
-    // ---------------------------------------------------------------
-    // Player <-> Player, request/accept flow
-    // ---------------------------------------------------------------
-
-    /**
-     * @return null if request was created, or an error message if it could not be.
-     */
-    public String requestCarry(Player requester, Player target) {
-        if (requester.getUniqueId().equals(target.getUniqueId())) {
-            return "你不能背自己。";
-        }
-        if (isCarrying(requester.getUniqueId())) {
-            return "你已經正在背著東西了，先用 /uncatch 放下再說。";
-        }
-        if (isBeingCarried(requester.getUniqueId())) {
-            return "你正被別人背著，沒辦法同時背別人。";
-        }
-        if (isBeingCarried(target.getUniqueId())) {
-            return target.getName() + " 已經正被別人背著了。";
-        }
-        if (!requester.getWorld().equals(target.getWorld())) {
-            return "你們不在同一個世界，沒辦法背起對方。";
-        }
-        if (requester.getLocation().distance(target.getLocation()) > MAX_DISTANCE) {
-            return "距離太遠了，靠近一點再試一次。";
-        }
-
-        pendingRequests.put(target.getUniqueId(), requester.getUniqueId());
-
-        Bukkit.getServer().getGlobalRegionScheduler().runDelayed(plugin, task -> {
-            UUID stillPending = pendingRequests.get(target.getUniqueId());
-            if (stillPending != null && stillPending.equals(requester.getUniqueId())) {
-                pendingRequests.remove(target.getUniqueId());
-            }
-        }, secondsToTicks(REQUEST_TIMEOUT_SECONDS));
-
-        return null;
-    }
-
-    public UUID getPendingRequester(UUID targetId) {
-        return pendingRequests.get(targetId);
-    }
-
-    public void clearPendingRequest(UUID targetId) {
-        pendingRequests.remove(targetId);
-    }
-
-    // ---------------------------------------------------------------
-    // Generic carry logic — works for a Player passenger (after accept)
-    // or any other Entity passenger (direct pickup, e.g. an animal).
-    // ---------------------------------------------------------------
-
-    /**
-     * @return null on success, or an error message.
-     */
-    public String startCarry(Player carrier, Entity passenger) {
-        if (!carrier.getWorld().equals(passenger.getWorld())) {
-            return "你們已經不在同一個世界了。";
-        }
-        if (carrier.getLocation().distance(passenger.getLocation()) > MAX_DISTANCE) {
-            return "距離太遠了，請靠近一點再試一次。";
-        }
-        if (isCarrying(carrier.getUniqueId()) || isBeingCarried(carrier.getUniqueId())) {
-            return "你現在沒辦法背東西。";
-        }
-        if (isBeingCarried(passenger.getUniqueId())) {
-            return passenger.getName() + " 已經被背走了。";
-        }
-
-        boolean success = carrier.addPassenger(passenger);
-        if (!success) {
-            return "背起 " + passenger.getName() + " 失敗，請再試一次。";
-        }
-
-        activeCarries.put(carrier.getUniqueId(), passenger.getUniqueId());
-        return null;
-    }
-
-    public void stopCarry(Player carrier) {
-        UUID passengerId = activeCarries.remove(carrier.getUniqueId());
-        if (passengerId == null) {
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onInteract(PlayerInteractEntityEvent event) {
+        if (event.getHand() != EquipmentSlot.HAND) {
             return;
         }
-        Entity passenger = Bukkit.getEntity(passengerId);
-        if (passenger != null && carrier.getPassengers().contains(passenger)) {
-            carrier.removePassenger(passenger);
-        }
-    }
 
-    /**
-     * Called when a carrier (a Player) disconnects, dies, or otherwise
-     * needs to be forcibly detached, without requiring a valid online
-     * reference for the passenger side.
-     */
-    public void forceRelease(UUID playerId) {
-        UUID passengerOfThisPlayer = activeCarries.remove(playerId);
-
-        UUID carrierOfThisPlayer = getCarrierOf(playerId);
-        if (carrierOfThisPlayer != null) {
-            activeCarries.remove(carrierOfThisPlayer);
-        }
-
-        pendingRequests.remove(playerId);
-        pendingRequests.entrySet().removeIf(entry -> entry.getValue().equals(playerId));
-
-        if (passengerOfThisPlayer != null) {
-            Entity passenger = Bukkit.getEntity(passengerOfThisPlayer);
-            Player carrier = Bukkit.getPlayer(playerId);
-            if (carrier != null && passenger != null && carrier.getPassengers().contains(passenger)) {
-                carrier.removePassenger(passenger);
-            }
-        }
-        if (carrierOfThisPlayer != null) {
-            Player carrier = Bukkit.getPlayer(carrierOfThisPlayer);
-            Entity passenger = Bukkit.getEntity(playerId);
-            if (carrier != null && passenger != null && carrier.getPassengers().contains(passenger)) {
-                carrier.removePassenger(passenger);
-            }
-        }
-    }
-
-    /**
-     * Called when a non-player passenger (an animal) dies, despawns, or is
-     * otherwise removed from the world. Only needs to clear the "being
-     * carried" side, since animals never carry anything themselves.
-     */
-    public void forceReleaseEntity(UUID entityId) {
-        UUID carrierId = getCarrierOf(entityId);
-        if (carrierId == null) {
+        if (!(event.getRightClicked() instanceof LivingEntity target)) {
             return;
         }
-        activeCarries.remove(carrierId);
-
-        Player carrier = Bukkit.getPlayer(carrierId);
-        Entity passenger = Bukkit.getEntity(entityId);
-        if (carrier != null && passenger != null && carrier.getPassengers().contains(passenger)) {
-            carrier.removePassenger(passenger);
+        if (target instanceof Player) {
+            return;
         }
+
+        Player player = event.getPlayer();
+        if (!player.isSneaking()) {
+            return;
+        }
+        if (player.getInventory().getItemInMainHand().getType() != Material.AIR) {
+            return;
+        }
+        if (!plugin.getConfig().getBoolean("animal-pickup.enabled", true)) {
+            return;
+        }
+        if (!player.hasPermission("catchme.animal.use")) {
+            return;
+        }
+        if (HARD_BLACKLIST.contains(target.getType())) {
+            return;
+        }
+        if (!isAllowedType(target.getType())) {
+            return;
+        }
+
+        if (isProtectedFromPlayer(player, target)) {
+            player.sendMessage(net.kyori.adventure.text.Component.text(
+                    "這隻動物受到領地保護，你沒有權限背走它。",
+                    net.kyori.adventure.text.format.NamedTextColor.RED));
+            event.setCancelled(true);
+            return;
+        }
+
+        event.setCancelled(true);
+
+        String error = manager.startCarry(player, target);
+        if (error != null) {
+            player.sendMessage(net.kyori.adventure.text.Component.text(error,
+                    net.kyori.adventure.text.format.NamedTextColor.RED));
+            return;
+        }
+
+        player.sendMessage(net.kyori.adventure.text.Component.text(
+                "你背起了一隻 " + target.getType().name() + "。輸入 /uncatch 可以放下。",
+                net.kyori.adventure.text.format.NamedTextColor.GREEN));
     }
 
-    public void releaseAll() {
-        for (Map.Entry<UUID, UUID> entry : new HashMap<>(activeCarries).entrySet()) {
-            Player carrier = Bukkit.getPlayer(entry.getKey());
-            Entity passenger = Bukkit.getEntity(entry.getValue());
-            if (carrier != null && passenger != null && carrier.getPassengers().contains(passenger)) {
-                carrier.removePassenger(passenger);
-            }
-        }
-        activeCarries.clear();
-        pendingRequests.clear();
+    /**
+     * Almost every land-claim / grief-protection plugin (GriefPrevention,
+     * WorldGuard, Towny, PlotSquared, RedProtect, etc.) hooks into
+     * EntityDamageByEntityEvent to stop non-members from harming animals
+     * inside a claim. PlayerInteractEntityEvent alone is not reliable —
+     * many protection plugins don't bother cancelling a harmless "pet the
+     * cow" interaction. So we synthesize a zero-damage
+     * EntityDamageByEntityEvent and dispatch it (without ever calling
+     * entity.damage(), so no real damage happens) purely to ask "would this
+     * player be allowed to interact with this entity here?".
+     */
+    private boolean isProtectedFromPlayer(Player player, LivingEntity target) {
+        EntityDamageByEntityEvent probe = new EntityDamageByEntityEvent(
+                player, target, EntityDamageEvent.DamageCause.CUSTOM, 0.0);
+        Bukkit.getPluginManager().callEvent(probe);
+        return probe.isCancelled();
     }
 
-    private static long secondsToTicks(long seconds) {
-        return TimeUnit.SECONDS.toMillis(seconds) / 50L; // 1 tick = 50ms
+    private boolean isAllowedType(EntityType type) {
+        Set<String> allowed = plugin.getConfig().getStringList("animal-pickup.allowed-types")
+                .stream()
+                .map(String::toUpperCase)
+                .collect(Collectors.toSet());
+        return allowed.contains(type.name());
     }
 }
