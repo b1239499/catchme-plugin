@@ -84,10 +84,6 @@ public class CatchManager {
 
         pendingRequests.put(target.getUniqueId(), requester.getUniqueId());
 
-        // Auto-expire the request after REQUEST_TIMEOUT_SECONDS.
-        // GlobalRegionScheduler only touches our own map, not any entity,
-        // so it is safe to run on the global region thread regardless of
-        // whether the server is Folia or regular Paper.
         Bukkit.getServer().getGlobalRegionScheduler().runDelayed(plugin, task -> {
             UUID stillPending = pendingRequests.get(target.getUniqueId());
             if (stillPending != null && stillPending.equals(requester.getUniqueId())) {
@@ -154,31 +150,30 @@ public class CatchManager {
      * reference for the passenger side.
      */
     public void forceRelease(UUID playerId) {
-        // If this player was carrying someone/something, drop the passenger.
-        UUID passengerId = activeCarries.remove(playerId);
-        if (passengerId != null) {
-            Entity passenger = Bukkit.getEntity(passengerId);
+        UUID passengerOfThisPlayer = activeCarries.remove(playerId);
+
+        UUID carrierOfThisPlayer = getCarrierOf(playerId);
+        if (carrierOfThisPlayer != null) {
+            activeCarries.remove(carrierOfThisPlayer);
+        }
+
+        pendingRequests.remove(playerId);
+        pendingRequests.entrySet().removeIf(entry -> entry.getValue().equals(playerId));
+
+        if (passengerOfThisPlayer != null) {
+            Entity passenger = Bukkit.getEntity(passengerOfThisPlayer);
             Player carrier = Bukkit.getPlayer(playerId);
             if (carrier != null && passenger != null && carrier.getPassengers().contains(passenger)) {
                 carrier.removePassenger(passenger);
             }
         }
-
-        // If this player was being carried, remove that relationship too.
-        activeCarries.entrySet().removeIf(entry -> {
-            if (entry.getValue().equals(playerId)) {
-                Player carrier = Bukkit.getPlayer(entry.getKey());
-                Entity passenger = Bukkit.getEntity(playerId);
-                if (carrier != null && passenger != null && carrier.getPassengers().contains(passenger)) {
-                    carrier.removePassenger(passenger);
-                }
-                return true;
+        if (carrierOfThisPlayer != null) {
+            Player carrier = Bukkit.getPlayer(carrierOfThisPlayer);
+            Entity passenger = Bukkit.getEntity(playerId);
+            if (carrier != null && passenger != null && carrier.getPassengers().contains(passenger)) {
+                carrier.removePassenger(passenger);
             }
-            return false;
-        });
-
-        pendingRequests.remove(playerId);
-        pendingRequests.entrySet().removeIf(entry -> entry.getValue().equals(playerId));
+        }
     }
 
     /**
@@ -187,17 +182,17 @@ public class CatchManager {
      * carried" side, since animals never carry anything themselves.
      */
     public void forceReleaseEntity(UUID entityId) {
-        activeCarries.entrySet().removeIf(entry -> {
-            if (entry.getValue().equals(entityId)) {
-                Player carrier = Bukkit.getPlayer(entry.getKey());
-                Entity passenger = Bukkit.getEntity(entityId);
-                if (carrier != null && passenger != null && carrier.getPassengers().contains(passenger)) {
-                    carrier.removePassenger(passenger);
-                }
-                return true;
-            }
-            return false;
-        });
+        UUID carrierId = getCarrierOf(entityId);
+        if (carrierId == null) {
+            return;
+        }
+        activeCarries.remove(carrierId);
+
+        Player carrier = Bukkit.getPlayer(carrierId);
+        Entity passenger = Bukkit.getEntity(entityId);
+        if (carrier != null && passenger != null && carrier.getPassengers().contains(passenger)) {
+            carrier.removePassenger(passenger);
+        }
     }
 
     public void releaseAll() {
