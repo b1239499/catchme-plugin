@@ -1,0 +1,44 @@
+name: fkcvtp
+main: com.vanishtp.plugin.FkcvtpPlugin
+version: 1.0.0
+api-version: '1.21'
+folia-supported: true
+author: YourName
+description: 隱身狀態綁定傳送與保護區繞過權限的整合插件 (Folia 相容)
+
+commands:
+  fkcvanish:
+    description: 切換隱身狀態
+    usage: /fkcvanish
+  fkcvtp:
+    description: 隱身狀態下直接傳送到指定玩家身邊
+    usage: /fkcvtp <玩家>
+  tpa:
+    description: 發送傳送請求給指定玩家
+    usage: /tpa <玩家>
+  tpaccept:
+    description: 接受目前的傳送請求
+    usage: /tpaccept
+  tpdeny:
+    description: 拒絕目前的傳送請求
+    usage: /tpdeny
+  spawn:
+    description: 傳送回重生點
+    usage: /spawn
+  fkcgod:
+    description: 切換無敵狀態（造成傷害會自動解除）
+    usage: /fkcgod
+
+permissions:
+  vanishtp.use:
+    description: 可以使用隱身與相關傳送指令
+    default: false
+  vanishtp.see:
+    description: 即使對方隱身也能看到（給其他管理員/巡查員用）
+    default: op
+  vanishtp.forceoff:
+    description: 可以用 /fkcvanish 強制解除自己的隱身（略過 tpa/spawn 限制）
+    default: false
+  vanishtp.god:
+    description: 可以使用 /fkcgod 切換無敵狀態
+    default: false
