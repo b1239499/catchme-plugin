@@ -1,0 +1,41 @@
+# CatchMe - 動物背起設定
+#
+# 玩家彼此之間背人走 /catch <玩家名稱> 的請求/接受流程不受這裡影響。
+# 這裡只控制「蹲下 + 空手右鍵點擊生物」直接背起動物的行為。
+
+animal-pickup:
+  # 是否啟用背動物功能
+  enabled: true
+
+  # 允許被背起的生物類型 (使用 Bukkit EntityType 名稱，全大寫)
+  # 參考: https://hub.spigotmc.org/javadocs/spigot/org/bukkit/entity/EntityType.html
+  allowed-types:
+    - PIG
+    - CHICKEN
+    - RABBIT
+    - SHEEP
+    - COW
+    - MOOSHROOM
+    - WOLF
+    - CAT
+    - FOX
+    - PARROT
+    - VILLAGER
+    - PANDA
+    - TURTLE
+
+  # 是否檢查領地保護。true（預設）代表：在有領地保護、玩家沒有權限
+  # 傷害/互動動物的地方，也不能背起動物（做法是模擬一個 0 傷害的攻擊
+  # 事件，看你伺服器裝的領地外掛（GriefPrevention、WorldGuard、Towny、
+  # PlotSquared、RedProtect 等等）會不會擋下來）。
+  # 設成 false 代表完全不檢查，任何地方都能背動物，不管領地保護。
+  check-protection: true
+
+# 不論上面清單怎麼設定，以下類型永遠禁止被背起 (BOSS / 危險生物安全鎖)：
+# ENDER_DRAGON, WITHER, WARDEN, GIANT
+# 這條規則寫死在程式碼裡，不受設定檔影響。
+
+# 權限節點說明：
+#   catchme.animal.use               - 能不能使用「蹲下+空手右鍵」背起動物這個功能（基本權限）
+#   catchme.animal.bypass-protection - 不管當地領地保護規則是什麼，這個人永遠都能背起動物
+#                                       （不用另外去領地外掛那邊設定信任名單，通常給管理員/工作人員用）
